@@ -62,20 +62,6 @@ st.markdown("""
         font-size: 0.75rem;
         margin-top: 4px;
     }
-    .analysis-card {
-        background: #f0f2f6;
-        padding: 20px;
-        border-radius: 12px;
-        margin-bottom: 16px;
-    }
-    .insight-box {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 24px;
-        border-radius: 12px;
-        margin: 16px 0;
-        line-height: 1.8;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -90,7 +76,7 @@ if "video_id" not in st.session_state:
     st.session_state.video_id = None
 
 # ============================================================
-# 한국어 불용어 리스트
+# 한국어 불용어
 # ============================================================
 STOPWORDS = {
     "의", "가", "이", "은", "들", "는", "좀", "잘", "걍", "과",
@@ -109,12 +95,12 @@ STOPWORDS = {
     "인데", "건데", "거", "게", "네", "데", "지", "요", "죠", "거든요",
     "이거", "저거", "뭐", "어", "음", "아", "오", "이건", "저", "제",
     "거의", "매우", "아주", "많이", "다", "또", "왜", "어떻게",
-    "합니다", "합니다", "됩니다", "입니다", "습니다", "ㄹ", "ㅎ", "ㅋ",
+    "합니다", "됩니다", "입니다", "습니다", "ㄹ", "ㅎ", "ㅋ",
 }
 
 
 # ============================================================
-# YouTube API 키 가져오기
+# 함수들
 # ============================================================
 def get_api_key():
     try:
@@ -123,9 +109,6 @@ def get_api_key():
         return None
 
 
-# ============================================================
-# 유튜브 영상 ID 추출
-# ============================================================
 def extract_video_id(url):
     patterns = [
         r'(?:youtube\.com\/watch\?v=)([a-zA-Z0-9_-]{11})',
@@ -140,9 +123,6 @@ def extract_video_id(url):
     return None
 
 
-# ============================================================
-# 영상 정보 가져오기
-# ============================================================
 def get_video_info(youtube, video_id):
     try:
         request = youtube.videos().list(
@@ -150,14 +130,13 @@ def get_video_info(youtube, video_id):
             id=video_id
         )
         response = request.execute()
-
         if response["items"]:
             item = response["items"][0]
             snippet = item["snippet"]
             statistics = item["statistics"]
             return {
-                "title": snippet.get("title", "제목 없음"),
-                "channel": snippet.get("channelTitle", "채널 없음"),
+                "title": snippet.get("title", ""),
+                "channel": snippet.get("channelTitle", ""),
                 "published": snippet.get("publishedAt", "")[:10],
                 "description": snippet.get("description", ""),
                 "thumbnail": snippet.get("thumbnails", {}).get("high", {}).get("url", ""),
@@ -167,17 +146,13 @@ def get_video_info(youtube, video_id):
             }
         return None
     except HttpError as e:
-        st.error(f"영상 정보를 가져오는 중 오류 발생: {e}")
+        st.error(f"영상 정보 오류: {e}")
         return None
 
 
-# ============================================================
-# 댓글 가져오기
-# ============================================================
 def get_comments(youtube, video_id, max_comments=100):
     comments = []
     next_page_token = None
-
     try:
         while len(comments) < max_comments:
             request = youtube.commentThreads().list(
@@ -189,7 +164,6 @@ def get_comments(youtube, video_id, max_comments=100):
                 textFormat="plainText"
             )
             response = request.execute()
-
             for item in response.get("items", []):
                 snippet = item["snippet"]["topLevelComment"]["snippet"]
                 comments.append({
@@ -198,26 +172,21 @@ def get_comments(youtube, video_id, max_comments=100):
                     "좋아요": snippet.get("likeCount", 0),
                     "작성일": snippet.get("publishedAt", "")[:10],
                 })
-
             next_page_token = response.get("nextPageToken")
             if not next_page_token:
                 break
         return comments
-
     except HttpError as e:
         error_reason = ""
         if e.error_details:
             error_reason = e.error_details[0].get("reason", "")
         if error_reason == "commentsDisabled":
-            st.warning("⚠️ 이 영상은 댓글이 비활성화되어 있습니다.")
+            st.warning("이 영상은 댓글이 비활성화되어 있습니다.")
         else:
-            st.error(f"댓글을 가져오는 중 오류 발생: {e}")
+            st.error(f"댓글 수집 오류: {e}")
         return []
 
 
-# ============================================================
-# 숫자 포맷팅
-# ============================================================
 def format_number(num):
     if num >= 100000000:
         return f"{num / 100000000:.1f}억"
@@ -228,52 +197,37 @@ def format_number(num):
     return str(num)
 
 
-# ============================================================
-# 키워드 추출 (형태소 분석기 없이)
-# ============================================================
 def extract_keywords(texts, top_n=20):
-    """댓글 텍스트에서 키워드를 추출합니다."""
     all_words = []
     for text in texts:
-        # 한글 2글자 이상 단어 추출
         korean_words = re.findall(r'[가-힣]{2,}', text)
-        # 영어 2글자 이상 단어 추출
         english_words = re.findall(r'[a-zA-Z]{3,}', text.lower())
         all_words.extend(korean_words)
         all_words.extend(english_words)
-
-    # 불용어 제거
     filtered = [w for w in all_words if w not in STOPWORDS and len(w) >= 2]
     counter = Counter(filtered)
     return counter.most_common(top_n)
 
 
-# ============================================================
-# 감성 분석 (간단한 규칙 기반)
-# ============================================================
 def simple_sentiment(text):
-    """간단한 규칙 기반 감성 분석"""
     positive_words = [
         "좋", "최고", "감사", "사랑", "행복", "대박", "멋",
         "훌륭", "완벽", "감동", "응원", "추천", "재밌", "재미",
         "굿", "짱", "아름", "예쁘", "힐링", "기대", "축하",
-        "존경", "귀엽", "좋아", "웃기", "꿀잼", "ㅋㅋ",
+        "존경", "귀엽", "좋아", "웃기", "꿀잼",
         "love", "great", "good", "best", "amazing", "awesome",
         "nice", "beautiful", "perfect", "wow", "cool", "fantastic",
-        "excellent", "wonderful", "funny", "like", "thank",
     ]
     negative_words = [
         "싫", "별로", "나쁘", "최악", "짜증", "화나", "실망",
         "슬프", "힘들", "아쉽", "안타", "걱정", "무섭", "답답",
-        "지루", "노잼", "ㅠㅠ", "ㅜㅜ", "그만", "혐", "욕",
+        "지루", "노잼", "그만", "혐",
         "hate", "bad", "worst", "terrible", "awful", "boring",
-        "sad", "angry", "disappointed", "horrible", "ugly", "poor",
+        "sad", "angry", "disappointed", "horrible",
     ]
-
     text_lower = text.lower()
     pos_count = sum(1 for w in positive_words if w in text_lower)
     neg_count = sum(1 for w in negative_words if w in text_lower)
-
     if pos_count > neg_count:
         return "긍정 😊"
     elif neg_count > pos_count:
@@ -283,102 +237,12 @@ def simple_sentiment(text):
 
 
 # ============================================================
-# 영상 내용 추론
-# ============================================================
-def infer_video_content(video_info, keywords, sentiments, df):
-    """댓글 키워드 + 영상 메타데이터로 영상 내용을 추론합니다."""
-
-    title = video_info.get("title", "")
-    description = video_info.get("description", "")[:500]
-
-    # 키워드 정리
-    top_keywords = [word for word, count in keywords[:15]]
-    keyword_str = ", ".join(top_keywords) if top_keywords else "추출된 키워드 없음"
-
-    # 감성 비율
-    total = len(sentiments)
-    if total > 0:
-        pos_ratio = sentiments.count("긍정 😊") / total * 100
-        neg_ratio = sentiments.count("부정 😞") / total * 100
-        neu_ratio = sentiments.count("중립 😐") / total * 100
-    else:
-        pos_ratio = neg_ratio = neu_ratio = 0
-
-    # 좋아요 Top 5 댓글
-    top_comments = df.nlargest(5, "좋아요")["댓글"].tolist()
-    top_comments_str = "\n".join([f"  • {c[:80]}" for c in top_comments])
-
-    # 반응 판단
-    if pos_ratio >= 60:
-        overall_reaction = "매우 긍정적"
-        reaction_emoji = "🔥"
-    elif pos_ratio >= 40:
-        overall_reaction = "대체로 긍정적"
-        reaction_emoji = "👍"
-    elif neg_ratio >= 40:
-        overall_reaction = "부정적 반응이 많음"
-        reaction_emoji = "⚠️"
-    else:
-        overall_reaction = "반응이 다양함"
-        reaction_emoji = "🤔"
-
-    analysis_text = f"""
-### 🎯 영상 내용 추론 분석
-
-**📌 영상 제목:** {title}
-
-**📺 채널:** {video_info.get('channel', '')}
-
----
-
-#### 🔑 댓글에서 추출한 핵심 키워드
-{keyword_str}
-
----
-
-#### 📊 시청자 반응 요약
-- **전체 반응:** {reaction_emoji} {overall_reaction}
-- **긍정 비율:** {pos_ratio:.1f}%
-- **부정 비율:** {neg_ratio:.1f}%
-- **중립 비율:** {neu_ratio:.1f}%
-
----
-
-#### 💬 가장 공감받은 댓글 TOP 5
-{top_comments_str}
-
----
-
-#### 🧠 종합 분석
-
-**[영상 주제 추정]**
-영상 제목과 댓글 키워드를 종합하면, 이 영상은 **"{title}"**에 관한 내용이며,
-시청자들이 가장 많이 언급한 주제는 **{', '.join(top_keywords[:5])}** 등입니다.
-
-**[시청자 반응]**
-전체 {total}개 댓글 중 긍정 반응이 {pos_ratio:.1f}%로,
-시청자들의 반응은 **{overall_reaction}**입니다.
-"""
-
-    if description:
-        analysis_text += f"""
----
-
-#### 📝 영상 설명글 (일부)
-> {description[:300]}{'...' if len(description) > 300 else ''}
-"""
-
-    return analysis_text
-
-
-# ============================================================
 # 메인 앱
 # ============================================================
 def main():
     st.markdown('<div class="main-header">🎬 유튜브 댓글 수집 & 분석기</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-header">유튜브 영상 링크를 입력하면 댓글을 수집하고 분석합니다</div>', unsafe_allow_html=True)
 
-    # API 키 확인
     api_key = get_api_key()
 
     if not api_key or api_key == "여기에_본인의_YouTube_Data_API_v3_키를_입력하세요":
@@ -392,9 +256,7 @@ def main():
         3. 'API 및 서비스' → '라이브러리'에서 **YouTube Data API v3** 활성화
         4. 'API 및 서비스' → '사용자 인증 정보' → 'API 키 만들기'
 
-        **2단계: Streamlit Cloud에 API 키 등록**
-        1. 앱 대시보드 → **Settings** → **Secrets**
-        2. 아래 내용 입력:
+        **2단계: Streamlit Cloud Secrets에 등록**
         ```
         YOUTUBE_API_KEY = "발급받은_API_키"
         ```
@@ -411,7 +273,6 @@ def main():
     # 입력 영역
     # --------------------------------------------------------
     st.markdown("---")
-
     col_input, col_option = st.columns([3, 1])
 
     with col_input:
@@ -430,30 +291,26 @@ def main():
     search_clicked = st.button("🔍 댓글 수집 시작", use_container_width=True, type="primary")
 
     # --------------------------------------------------------
-    # 댓글 수집
+    # 수집 실행
     # --------------------------------------------------------
     if search_clicked and url:
         video_id = extract_video_id(url)
-
         if not video_id:
             st.error("❌ 올바른 유튜브 링크를 입력해주세요!")
             return
 
         with st.spinner("📡 영상 정보를 불러오는 중..."):
             video_info = get_video_info(youtube, video_id)
-
         if not video_info:
             st.error("❌ 영상 정보를 찾을 수 없습니다.")
             return
 
         with st.spinner(f"📝 댓글을 수집하는 중... (최대 {max_comments}개)"):
             comments = get_comments(youtube, video_id, max_comments)
-
         if not comments:
             st.warning("수집된 댓글이 없습니다.")
             return
 
-        # session_state에 저장 → 정렬/탭 전환해도 유지
         st.session_state.comments_data = comments
         st.session_state.video_info = video_info
         st.session_state.video_id = video_id
@@ -462,7 +319,7 @@ def main():
         st.warning("⚠️ 유튜브 링크를 입력해주세요!")
 
     # --------------------------------------------------------
-    # 결과 표시 (session_state에 데이터가 있을 때)
+    # 결과 표시
     # --------------------------------------------------------
     if st.session_state.comments_data is None:
         st.info("👆 위에 유튜브 링크를 입력하고 '댓글 수집 시작' 버튼을 눌러주세요!")
@@ -473,38 +330,33 @@ def main():
     video_id = st.session_state.video_id
     df = pd.DataFrame(comments)
 
-    # 영상 정보 표시
+    # 영상 정보 카드
     st.markdown("---")
     st.subheader("📺 영상 정보")
 
     col_thumb, col_info = st.columns([1, 2])
-
     with col_thumb:
         if video_info["thumbnail"]:
             st.image(video_info["thumbnail"], use_container_width=True)
-
     with col_info:
         st.markdown(f"### {video_info['title']}")
         st.markdown(f"**채널:** {video_info['channel']}  |  **게시일:** {video_info['published']}")
-
-        stat1, stat2, stat3 = st.columns(3)
-        with stat1:
+        s1, s2, s3 = st.columns(3)
+        with s1:
             st.metric("👁️ 조회수", format_number(video_info["view_count"]))
-        with stat2:
+        with s2:
             st.metric("👍 좋아요", format_number(video_info["like_count"]))
-        with stat3:
+        with s3:
             st.metric("💬 댓글수", format_number(video_info["comment_count"]))
 
     st.success(f"✅ 총 **{len(df)}개**의 댓글을 수집했습니다!")
 
     # --------------------------------------------------------
-    # 탭 구성: 댓글 목록 / 데이터 테이블 / 댓글 분석
+    # 탭
     # --------------------------------------------------------
     tab1, tab2, tab3 = st.tabs(["📋 댓글 목록", "📊 데이터 테이블", "🧠 댓글 분석"])
 
-    # ========================================
-    # 탭1: 댓글 목록
-    # ========================================
+    # ==================== 탭1: 댓글 목록 ====================
     with tab1:
         sort_option = st.selectbox(
             "정렬 기준",
@@ -536,9 +388,7 @@ def main():
             </div>
             """, unsafe_allow_html=True)
 
-    # ========================================
-    # 탭2: 데이터 테이블
-    # ========================================
+    # ==================== 탭2: 데이터 테이블 ====================
     with tab2:
         st.dataframe(
             df,
@@ -563,109 +413,227 @@ def main():
         with s4:
             st.metric("작성자 수", f"{df['작성자'].nunique()}명")
 
-        # CSV 다운로드 (작게 하나만)
         csv_data = df.to_csv(index=False, encoding="utf-8-sig")
         st.download_button(
             label="📥 CSV 다운로드",
             data=csv_data,
-            file_name=f"youtube_comments_{video_id}.csv",
+            file_name=f"comments_{video_id}.csv",
             mime="text/csv",
         )
 
-    # ========================================
-    # 탭3: 댓글 분석
-    # ========================================
+    # ==================== 탭3: 댓글 분석 ====================
     with tab3:
         st.subheader("🧠 댓글 기반 영상 분석")
 
         with st.spinner("🔍 댓글을 분석하는 중..."):
-
-            # 1) 키워드 추출
             all_texts = df["댓글"].tolist()
             keywords = extract_keywords(all_texts, top_n=20)
+            df_analysis = df.copy()
+            df_analysis["감성"] = df_analysis["댓글"].apply(simple_sentiment)
 
-            # 2) 감성 분석
-            df["감성"] = df["댓글"].apply(simple_sentiment)
-            sentiments = df["감성"].tolist()
+        # ---- 감성 비율 숫자 카드 ----
+        st.markdown("---")
+        st.markdown("### 💭 감성 분석 결과")
 
-            # ----------------------------------------
-            # 감성 분석 파이차트 + 키워드 바차트 나란히
-            # ----------------------------------------
-            st.markdown("---")
-            st.markdown("### 📊 시각화 분석")
+        sentiment_counts = df_analysis["감성"].value_counts()
+        total = len(df_analysis)
 
-            chart_col1, chart_col2 = st.columns(2)
+        pos_count = sentiment_counts.get("긍정 😊", 0)
+        neg_count = sentiment_counts.get("부정 😞", 0)
+        neu_count = sentiment_counts.get("중립 😐", 0)
 
-            # 파이차트: 감성 비율
-            with chart_col1:
-                st.markdown("#### 💭 댓글 감성 비율")
+        pos_pct = pos_count / total * 100
+        neg_pct = neg_count / total * 100
+        neu_pct = neu_count / total * 100
 
-                sentiment_counts = df["감성"].value_counts()
-                labels = sentiment_counts.index.tolist()
-                sizes = sentiment_counts.values.tolist()
+        m1, m2, m3 = st.columns(3)
+        with m1:
+            st.metric("😊 긍정", f"{pos_count}개 ({pos_pct:.1f}%)")
+        with m2:
+            st.metric("😞 부정", f"{neg_count}개 ({neg_pct:.1f}%)")
+        with m3:
+            st.metric("😐 중립", f"{neu_count}개 ({neu_pct:.1f}%)")
 
-                colors_map = {
-                    "긍정 😊": "#4CAF50",
-                    "부정 😞": "#F44336",
-                    "중립 😐": "#9E9E9E",
-                }
-                colors = [colors_map.get(l, "#999") for l in labels]
+        # ---- 차트 2개 나란히 ----
+        st.markdown("---")
+        st.markdown("### 📊 시각화")
 
-                fig1, ax1 = plt.subplots(figsize=(6, 6))
-                wedges, texts, autotexts = ax1.pie(
-                    sizes,
-                    labels=labels,
-                    autopct='%1.1f%%',
-                    colors=colors,
-                    startangle=90,
-                    textprops={'fontsize': 13},
-                    pctdistance=0.75,
+        chart_col1, chart_col2 = st.columns(2)
+
+        # 파이차트: 감성 비율
+        with chart_col1:
+            st.markdown("#### 감성 비율 차트")
+
+            labels = sentiment_counts.index.tolist()
+            sizes = sentiment_counts.values.tolist()
+            colors_map = {
+                "긍정 😊": "#4CAF50",
+                "부정 😞": "#F44336",
+                "중립 😐": "#9E9E9E",
+            }
+            colors = [colors_map.get(l, "#999") for l in labels]
+
+            fig1, ax1 = plt.subplots(figsize=(5, 5))
+            wedges, texts, autotexts = ax1.pie(
+                sizes,
+                labels=labels,
+                autopct='%1.1f%%',
+                colors=colors,
+                startangle=90,
+                textprops={'fontsize': 11},
+            )
+            for t in autotexts:
+                t.set_fontsize(13)
+                t.set_fontweight('bold')
+            ax1.set_title("Sentiment Ratio", fontsize=14, fontweight='bold', pad=15)
+            st.pyplot(fig1)
+            plt.close(fig1)
+
+        # 바차트: 키워드 빈도
+        with chart_col2:
+            st.markdown("#### 핵심 키워드 TOP 15")
+
+            if keywords:
+                top_kw = keywords[:15]
+                words = [w for w, c in top_kw]
+                counts = [c for w, c in top_kw]
+
+                fig2, ax2 = plt.subplots(figsize=(5, 5))
+                bar_colors = plt.cm.Reds(
+                    [0.3 + 0.7 * (i / max(len(words), 1)) for i in range(len(words))]
                 )
-                for t in autotexts:
-                    t.set_fontsize(14)
-                    t.set_fontweight('bold')
-                ax1.set_title("Comment Sentiment Ratio", fontsize=16, fontweight='bold', pad=20)
-                st.pyplot(fig1)
+                bars = ax2.barh(range(len(words)), counts, color=bar_colors)
+                ax2.set_yticks(range(len(words)))
+                ax2.set_yticklabels(words, fontsize=10)
+                ax2.invert_yaxis()
+                ax2.set_xlabel("Frequency", fontsize=11)
+                ax2.set_title("Top Keywords", fontsize=14, fontweight='bold')
 
-            # 바차트: 키워드 빈도
-            with chart_col2:
-                st.markdown("#### 🔑 댓글 핵심 키워드 TOP 15")
-
-                if keywords:
-                    top_kw = keywords[:15]
-                    words = [w for w, c in top_kw]
-                    counts = [c for w, c in top_kw]
-
-                    fig2, ax2 = plt.subplots(figsize=(6, 6))
-                    bars = ax2.barh(
-                        range(len(words)),
-                        counts,
-                        color=plt.cm.Reds(
-                            [0.3 + 0.7 * (i / len(words)) for i in range(len(words))]
-                        ),
+                for bar, count in zip(bars, counts):
+                    ax2.text(
+                        bar.get_width() + max(counts) * 0.02,
+                        bar.get_y() + bar.get_height() / 2,
+                        str(count),
+                        va='center', fontsize=10, fontweight='bold',
                     )
-                    ax2.set_yticks(range(len(words)))
-                    ax2.set_yticklabels(words, fontsize=12)
-                    ax2.invert_yaxis()
-                    ax2.set_xlabel("Frequency", fontsize=12)
-                    ax2.set_title("Top Keywords in Comments", fontsize=16, fontweight='bold')
+                plt.tight_layout()
+                st.pyplot(fig2)
+                plt.close(fig2)
+            else:
+                st.info("키워드를 추출할 수 없습니다.")
 
-                    for bar, count in zip(bars, counts):
-                        ax2.text(
-                            bar.get_width() + max(counts) * 0.02,
-                            bar.get_y() + bar.get_height() / 2,
-                            str(count),
-                            va='center',
-                            fontsize=11,
-                            fontweight='bold',
-                        )
-                    plt.tight_layout()
-                    st.pyplot(fig2)
-                else:
-                    st.info("키워드를 추출할 수 없습니다.")
+        # ---- 좋아요 분포 히스토그램 ----
+        st.markdown("---")
+        st.markdown("#### 👍 댓글 좋아요 분포")
 
-            # ----------------------------------------
-            # 좋아요 분포 히스토그램
-            # ----------------------------------------
-            st.markdown("---")
-            st.markdown("#### 👍 댓글 좋아요 분포
+        fig3, ax3 = plt.subplots(figsize=(10, 4))
+        like_data = df_analysis["좋아요"]
+
+        if like_data.max() > 0:
+            ax3.hist(like_data, bins=30, color="#FF6B6B", edgecolor="white", alpha=0.8)
+            ax3.set_xlabel("Likes", fontsize=12)
+            ax3.set_ylabel("Count", fontsize=12)
+            ax3.set_title("Comment Likes Distribution", fontsize=14, fontweight='bold')
+            plt.tight_layout()
+            st.pyplot(fig3)
+        else:
+            st.info("좋아요가 있는 댓글이 없습니다.")
+        plt.close(fig3)
+
+        # ---- 날짜별 댓글 수 ----
+        st.markdown("---")
+        st.markdown("#### 📅 날짜별 댓글 수 추이")
+
+        df_date = df_analysis.copy()
+        df_date["작성일"] = pd.to_datetime(df_date["작성일"], errors="coerce")
+        df_date = df_date.dropna(subset=["작성일"])
+
+        if not df_date.empty:
+            date_counts = df_date.groupby(df_date["작성일"].dt.date).size().reset_index(name="댓글수")
+            date_counts = date_counts.sort_values("작성일")
+
+            fig4, ax4 = plt.subplots(figsize=(10, 4))
+            ax4.fill_between(date_counts["작성일"], date_counts["댓글수"], alpha=0.3, color="#667eea")
+            ax4.plot(date_counts["작성일"], date_counts["댓글수"], color="#667eea", linewidth=2)
+            ax4.set_xlabel("Date", fontsize=12)
+            ax4.set_ylabel("Comments", fontsize=12)
+            ax4.set_title("Comments Over Time", fontsize=14, fontweight='bold')
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            st.pyplot(fig4)
+            plt.close(fig4)
+
+        # ---- 종합 영상 분석 ----
+        st.markdown("---")
+        st.markdown("### 🎯 종합 영상 내용 분석")
+
+        # 반응 판단
+        if pos_pct >= 60:
+            reaction = "🔥 매우 긍정적"
+        elif pos_pct >= 40:
+            reaction = "👍 대체로 긍정적"
+        elif neg_pct >= 40:
+            reaction = "⚠️ 부정적 반응이 많음"
+        else:
+            reaction = "🤔 다양한 반응"
+
+        # 인기 댓글 Top 5
+        top5 = df_analysis.nlargest(5, "좋아요")
+
+        keyword_str = ", ".join([w for w, c in keywords[:10]]) if keywords else "없음"
+
+        st.markdown(f"""
+> **📌 영상 제목:** {video_info['title']}
+>
+> **📺 채널:** {video_info['channel']}
+
+---
+
+**🔑 댓글 핵심 키워드:** {keyword_str}
+
+**📊 전체 시청자 반응:** {reaction}
+- 긍정 {pos_pct:.1f}% / 부정 {neg_pct:.1f}% / 중립 {neu_pct:.1f}%
+
+---
+
+**🧠 댓글 기반 영상 내용 추론:**
+
+영상 제목 **"{video_info['title']}"** 과 댓글에서 자주 등장하는 키워드
+**{keyword_str}** 를 종합해 보면, 이 영상의 핵심 주제를 파악할 수 있습니다.
+
+시청자 {total}명의 댓글 중 **{pos_pct:.1f}%가 긍정적** 반응을 보이고 있어
+전반적으로 **{reaction}** 인 분위기입니다.
+        """)
+
+        # 영상 설명글
+        desc = video_info.get("description", "")
+        if desc:
+            with st.expander("📝 영상 설명글 보기"):
+                st.text(desc[:1000])
+
+        # 인기 댓글 Top 5
+        st.markdown("---")
+        st.markdown("#### 🏆 가장 공감받은 댓글 TOP 5")
+
+        for idx, row in top5.iterrows():
+            st.markdown(f"""
+            <div class="comment-box">
+                <div class="comment-author">👤 {row['작성자']}  ·  👍 {row['좋아요']}</div>
+                <div class="comment-text">{row['댓글']}</div>
+                <div class="comment-meta">감성: {row['감성']}  ·  📅 {row['작성일']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    # --------------------------------------------------------
+    # 하단 안내
+    # --------------------------------------------------------
+    st.markdown("---")
+    with st.expander("ℹ️ 사용 안내"):
+        st.markdown("""
+        **사용 방법:**
+        1. 유튜브 영상 URL을 복사해서 붙여넣기
+        2. 수집할 댓글 수 선택
+        3. '댓글 수집 시작' 클릭
+        4. 댓글 목록, 데이터 테이블, 분석 탭에서 결과 확인
+
+        **지원 URL
