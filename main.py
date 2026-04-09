@@ -363,7 +363,7 @@ def main():
         st.download_button("📥 CSV", csv, f"comments_{st.session_state.vid}.csv", "text/csv")
 
     # ==================== 탭4: 분석 ====================
-    with tab3_analysis := tab4:
+    with tab4:
         st.subheader("🧠 댓글 분석")
 
         df_a = df.copy()
