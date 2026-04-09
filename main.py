@@ -6,6 +6,7 @@ import matplotlib
 from collections import Counter
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from deep_translator import GoogleTranslator
 
 matplotlib.rcParams['font.family'] = 'DejaVu Sans'
 matplotlib.rcParams['axes.unicode_minus'] = False
@@ -20,6 +21,8 @@ st.markdown("""
 }
 .comment-box .author {font-weight:bold; color:#333;}
 .comment-box .text {color:#555; margin-top:4px;}
+.comment-box .translated {color:#1a73e8; margin-top:6px; font-style:italic;
+    background:#e8f0fe; padding:8px; border-radius:6px;}
 .comment-box .meta {color:#999; font-size:0.8rem; margin-top:4px;}
 </style>
 """, unsafe_allow_html=True)
@@ -28,6 +31,8 @@ if "comments" not in st.session_state:
     st.session_state.comments = None
     st.session_state.vinfo = None
     st.session_state.vid = None
+if "translated" not in st.session_state:
+    st.session_state.translated = {}
 
 STOPWORDS = {
     "의","가","이","은","들","는","좀","잘","걍","과","도","를","으로",
@@ -44,6 +49,46 @@ STOPWORDS = {
     "i","you","he","she","we","they","me","my","your","so","if","just",
     "about","up","out","no","what","all","should",
 }
+
+LANG_OPTIONS = {
+    "한국어": "ko",
+    "영어": "en",
+    "일본어": "ja",
+    "중국어(간체)": "zh-CN",
+    "중국어(번체)": "zh-TW",
+    "스페인어": "es",
+    "프랑스어": "fr",
+    "독일어": "de",
+    "러시아어": "ru",
+    "베트남어": "vi",
+    "태국어": "th",
+    "인도네시아어": "id",
+    "아랍어": "ar",
+    "포르투갈어": "pt",
+    "이탈리아어": "it",
+}
+
+
+def translate_text(text, target_lang="ko"):
+    """텍스트를 목표 언어로 번역합니다."""
+    try:
+        if not text or text.strip() == "":
+            return ""
+        # 5000자 제한
+        text = text[:5000]
+        result = GoogleTranslator(source='auto', target=target_lang).translate(text)
+        return result if result else text
+    except Exception:
+        return text
+
+
+def translate_comments_batch(comments_list, target_lang="ko"):
+    """여러 댓글을 한번에 번역합니다."""
+    translated = []
+    for text in comments_list:
+        t = translate_text(text, target_lang)
+        translated.append(t)
+    return translated
 
 
 def get_api_key():
@@ -176,8 +221,8 @@ def main():
         st.session_state.comments = comments
         st.session_state.vinfo = vinfo
         st.session_state.vid = vid
+        st.session_state.translated = {}
 
-    # 데이터 없으면 종료
     if st.session_state.comments is None:
         st.info("👆 유튜브 링크를 입력하고 버튼을 눌러주세요!")
         return
@@ -202,9 +247,9 @@ def main():
     st.success(f"✅ {len(df)}개 댓글 수집 완료!")
 
     # 탭
-    tab1, tab2, tab3 = st.tabs(["📋 댓글 목록", "📊 데이터 테이블", "🧠 댓글 분석"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📋 댓글 목록", "🌐 번역", "📊 데이터 테이블", "🧠 댓글 분석"])
 
-    # ---- 탭1 ----
+    # ==================== 탭1: 댓글 목록 ====================
     with tab1:
         sort = st.selectbox("정렬", ["관련성순","좋아요순","최신순","오래된순"], key="sort")
         d = df.copy()
@@ -225,8 +270,89 @@ def main():
                 <div class="meta">👍 {r['좋아요']}  ·  📅 {r['작성일']}</div>
             </div>""", unsafe_allow_html=True)
 
-    # ---- 탭2 ----
+    # ==================== 탭2: 번역 ====================
     with tab2:
+        st.subheader("🌐 댓글 번역")
+
+        tc1, tc2 = st.columns([1,1])
+        with tc1:
+            target_name = st.selectbox("번역할 언어 선택", list(LANG_OPTIONS.keys()), key="lang")
+        with tc2:
+            translate_count = st.selectbox(
+                "번역할 댓글 수",
+                [10, 20, 50, 100, "전체"],
+                index=0,
+                key="tr_count"
+            )
+
+        target_code = LANG_OPTIONS[target_name]
+
+        if st.button("🌐 번역 시작", use_container_width=True, type="primary", key="tr_btn"):
+            if translate_count == "전체":
+                n = len(df)
+            else:
+                n = min(int(translate_count), len(df))
+
+            texts = df["댓글"].tolist()[:n]
+            translated_list = []
+
+            progress = st.progress(0)
+            status = st.empty()
+
+            for i, text in enumerate(texts):
+                status.text(f"번역 중... {i+1}/{n}")
+                t = translate_text(text, target_code)
+                translated_list.append(t)
+                progress.progress((i+1)/n)
+
+            progress.empty()
+            status.empty()
+
+            st.session_state.translated = {
+                "lang": target_name,
+                "results": translated_list,
+                "count": n
+            }
+            st.success(f"✅ {n}개 댓글 번역 완료! ({target_name})")
+
+        # 번역 결과 표시
+        if st.session_state.translated:
+            tr = st.session_state.translated
+            st.markdown(f"#### 📝 번역 결과 ({tr['lang']}, {tr['count']}개)")
+
+            sort_tr = st.selectbox("정렬", ["관련성순","좋아요순","최신순"], key="sort_tr")
+            d_tr = df.head(tr["count"]).copy()
+            d_tr["번역"] = tr["results"]
+
+            if sort_tr == "좋아요순":
+                d_tr = d_tr.sort_values("좋아요", ascending=False).reset_index(drop=True)
+            elif sort_tr == "최신순":
+                d_tr = d_tr.sort_values("작성일", ascending=False).reset_index(drop=True)
+
+            search_tr = st.text_input("🔍 번역 결과에서 검색", key="q_tr")
+            if search_tr:
+                mask = (d_tr["댓글"].str.contains(search_tr, case=False, na=False) |
+                        d_tr["번역"].str.contains(search_tr, case=False, na=False))
+                d_tr = d_tr[mask].reset_index(drop=True)
+                st.info(f"검색 결과: {len(d_tr)}개")
+
+            for _, r in d_tr.iterrows():
+                st.markdown(f"""<div class="comment-box">
+                    <div class="author">👤 {r['작성자']}</div>
+                    <div class="text">{r['댓글']}</div>
+                    <div class="translated">🌐 {r['번역']}</div>
+                    <div class="meta">👍 {r['좋아요']}  ·  📅 {r['작성일']}</div>
+                </div>""", unsafe_allow_html=True)
+
+            # 번역 결과 CSV 다운로드
+            csv_tr = d_tr.to_csv(index=False, encoding="utf-8-sig")
+            st.download_button(
+                "📥 번역 결과 CSV 다운로드", csv_tr,
+                f"translated_{st.session_state.vid}.csv", "text/csv"
+            )
+
+    # ==================== 탭3: 데이터 테이블 ====================
+    with tab3:
         st.dataframe(df, use_container_width=True, height=400)
         m1,m2,m3,m4 = st.columns(4)
         m1.metric("총 댓글", f"{len(df)}개")
@@ -236,11 +362,10 @@ def main():
         csv = df.to_csv(index=False, encoding="utf-8-sig")
         st.download_button("📥 CSV", csv, f"comments_{st.session_state.vid}.csv", "text/csv")
 
-    # ---- 탭3: 분석 ----
-    with tab3:
+    # ==================== 탭4: 분석 ====================
+    with tab3_analysis := tab4:
         st.subheader("🧠 댓글 분석")
 
-        # 감성 분석
         df_a = df.copy()
         df_a["감성"] = df_a["댓글"].apply(sentiment)
         total = len(df_a)
@@ -255,13 +380,11 @@ def main():
         m2.metric("😞 부정", f"{neg_n}개 ({neg_p:.1f}%)")
         m3.metric("😐 중립", f"{neu_n}개 ({neu_p:.1f}%)")
 
-        # 키워드
         keywords = extract_keywords(df["댓글"].tolist())
 
         st.markdown("---")
         col1, col2 = st.columns(2)
 
-        # 감성 파이차트
         with col1:
             st.markdown("#### 감성 비율")
             fig1, ax1 = plt.subplots(figsize=(5,5))
@@ -274,7 +397,6 @@ def main():
             st.pyplot(fig1)
             plt.close(fig1)
 
-        # 키워드 바차트
         with col2:
             st.markdown("#### 핵심 키워드 TOP 15")
             if keywords:
@@ -294,7 +416,6 @@ def main():
                 st.pyplot(fig2)
                 plt.close(fig2)
 
-        # 좋아요 분포
         st.markdown("---")
         st.markdown("#### 👍 좋아요 분포")
         fig3, ax3 = plt.subplots(figsize=(10,3))
@@ -303,7 +424,6 @@ def main():
         ax3.set_title("Likes Distribution", fontweight='bold')
         plt.tight_layout(); st.pyplot(fig3); plt.close(fig3)
 
-        # 날짜별 댓글 추이
         st.markdown("---")
         st.markdown("#### 📅 날짜별 댓글 추이")
         df_d = df_a.copy()
@@ -318,7 +438,6 @@ def main():
             ax4.set_title("Comments Over Time", fontweight='bold')
             plt.xticks(rotation=45); plt.tight_layout(); st.pyplot(fig4); plt.close(fig4)
 
-        # 종합 분석
         st.markdown("---")
         st.markdown("### 🎯 종합 분석")
 
@@ -328,7 +447,6 @@ def main():
         else: reaction = "🤔 반응 다양"
 
         kw_str = ", ".join([w for w,c in keywords[:10]]) if keywords else "없음"
-
         top5 = df_a.nlargest(5, "좋아요")
         top5_str = ""
         for _, r in top5.iterrows():
